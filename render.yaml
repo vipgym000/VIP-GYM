@@ -1,0 +1,8 @@
+
+services:
+  - type: web
+    name: vipgym
+    env: java
+    buildCommand: ./mvnw clean install
+    startCommand: java -jar target/vipgym.jar
+    plan: free
