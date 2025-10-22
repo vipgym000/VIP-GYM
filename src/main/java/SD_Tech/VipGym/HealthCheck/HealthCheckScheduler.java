@@ -10,7 +10,7 @@ public class HealthCheckScheduler {
     private final RestTemplate restTemplate = new RestTemplate();
 
     // Change localhost and port if needed
-    private final String healthCheckUrl = "http://localhost:8080/health";
+    private final String healthCheckUrl = "http://localhost:8443/health";
 
     @Scheduled(fixedRate = 14 * 60 * 1000)  // every 14 minutes
     public void callHealthCheck() {
