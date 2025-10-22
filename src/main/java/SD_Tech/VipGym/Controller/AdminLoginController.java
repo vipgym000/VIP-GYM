@@ -5,6 +5,7 @@ import SD_Tech.VipGym.Repository.AdminRepository;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -13,6 +14,9 @@ public class AdminLoginController {
 
     @Autowired
     private AdminRepository adminRepository;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     // DTO for login request
     @Data
@@ -23,11 +27,19 @@ public class AdminLoginController {
 
     @PostMapping("/login")
     public ResponseEntity<String> login(@RequestBody LoginRequest request) {
-        Admin admin = adminRepository.findByUsernameAndPassword(request.getUsername(), request.getPassword());
-        if (admin != null) {
-            // You can generate a token or session here. For now just return success.
-            return ResponseEntity.ok("Login successful");
+        Admin admin = adminRepository.findByUsername(request.getUsername());
+
+        if (admin == null) {
+            return ResponseEntity.status(401).body("Invalid username or password");
         }
-        return ResponseEntity.status(401).body("Invalid username or password");
+
+        boolean passwordMatches = passwordEncoder.matches(request.getPassword(), admin.getPassword());
+
+        if (passwordMatches) {
+            // TODO: Generate token or session here for real authentication
+            return ResponseEntity.ok("Login successful");
+        } else {
+            return ResponseEntity.status(401).body("Invalid username or password");
+        }
     }
 }

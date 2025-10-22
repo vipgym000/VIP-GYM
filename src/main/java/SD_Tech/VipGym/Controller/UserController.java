@@ -7,23 +7,30 @@ import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import SD_Tech.VipGym.Dto.UserRegistrationRequest;
 import SD_Tech.VipGym.Entity.Membership;
 import SD_Tech.VipGym.Entity.Payment;
 import SD_Tech.VipGym.Entity.User;
+import SD_Tech.VipGym.Entity.UserStatus;
 import SD_Tech.VipGym.Repository.MembershipRepository;
 import SD_Tech.VipGym.Repository.PaymentRepository;
 import SD_Tech.VipGym.Repository.UserRepository;
+import SD_Tech.VipGym.Service.ByteArrayMultipartFile;
 import SD_Tech.VipGym.Service.GitHubImageUploadService;
 import SD_Tech.VipGym.Service.ReceiptImageService;
-import SD_Tech.VipGym.Service.ByteArrayMultipartFile;
 
 @RestController
 @RequestMapping("/admin/users")
-public class UserRegistrationController {
+public class UserController {
 
     @Autowired
     private UserRepository userRepository;
@@ -78,6 +85,15 @@ public class UserRegistrationController {
                 );
             }
 
+            // Validate and set status
+            UserStatus status;
+            try {
+                status = request.getStatus() == null
+                        ? UserStatus.ACTIVE // default
+                        : UserStatus.valueOf(request.getStatus().toUpperCase());
+            } catch (IllegalArgumentException ex) {
+                return ResponseEntity.badRequest().body("Invalid status. Must be 'ACTIVE' or 'INACTIVE'.");
+            }
             // Create user entity
             User user = new User();
             user.setFullName(request.getFullName());
@@ -87,7 +103,7 @@ public class UserRegistrationController {
             user.setJoinDate(request.getJoinDate());
             user.setProfilePictureUrl(uploadedImageUrl);
             user.setMembership(membership);
-
+            user.setStatus(status);
             // Save user to get ID
             user = userRepository.save(user);
 
@@ -172,4 +188,14 @@ public class UserRegistrationController {
         }
     }
 
+    @GetMapping("/all")
+    public ResponseEntity<?> getAllUsers() {
+        try {
+            // Fetch all users with their membership details eagerly if needed
+            var users = userRepository.findAll();
+            return ResponseEntity.ok(users);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("Failed to fetch users: " + e.getMessage());
+        }
+    }
 }
