@@ -33,7 +33,7 @@ public class SecurityConfig {
     public CorsFilter corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowCredentials(true);
-        config.setAllowedOrigins(List.of("http://localhost:5173","http://192.168.1.8:5173"));  // Frontend origin
+        config.setAllowedOrigins(List.of("http://localhost:5173","https://vip-gym.netlify.app"));  // Frontend origin
         config.setAllowedHeaders(List.of("*"));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         
