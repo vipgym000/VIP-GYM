@@ -1,8 +1,17 @@
-
 services:
   - type: web
     name: vipgym
-    env: java
-    buildCommand: ./mvnw clean install
-    startCommand: java -jar target/vipgym.jar
+    runtime: docker
+    region: oregon
     plan: free
+    envVars:
+      - key: DB_URL
+        value: jdbc:postgresql://db.nhhzmzxoamgflwnnvgqk.supabase.co:5432/postgres?sslmode=require
+      - key: DB_USERNAME
+        value: postgres
+      - key: DB_PASSWORD
+        value: vip@gym@123
+      - key: SPRING_MAIL_USERNAME
+        value: vipgym000@gmail.com
+      - key: SPRING_MAIL_PASSWORD
+        value: jsvajbcswhfjferp
