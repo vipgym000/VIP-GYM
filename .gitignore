@@ -38,4 +38,3 @@ Thumbs.db
 
 ### Sensitive / Environment files ###
 .env
-src/main/resources/application.properties
