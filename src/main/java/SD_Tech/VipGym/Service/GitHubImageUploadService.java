@@ -200,27 +200,49 @@ public class GitHubImageUploadService {
         }
     }
     
-    private byte[] compressImage(byte[] imageBytes, float quality) throws IOException {
+    private byte[] compressImage(byte[] imageBytes, float initialQuality) throws IOException {
         ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
-        BufferedImage image = ImageIO.read(bais);
+        BufferedImage originalImage = ImageIO.read(bais);
 
-        if (image == null) {
-            throw new IOException("Invalid image file, cannot read for compression.");
+        if (originalImage == null) {
+            throw new IOException("Invalid or unsupported image format");
+        }
+
+        int width = originalImage.getWidth();
+        int height = originalImage.getHeight();
+
+        // 🔻 Step 1: Resize large images (downscale to max 1080px width)
+        int maxDimension = 1080;
+        if (width > maxDimension || height > maxDimension) {
+            float scale = Math.min((float) maxDimension / width, (float) maxDimension / height);
+            int newWidth = Math.round(width * scale);
+            int newHeight = Math.round(height * scale);
+            BufferedImage resized = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
+            resized.getGraphics().drawImage(originalImage, 0, 0, newWidth, newHeight, java.awt.Color.WHITE, null);
+            originalImage = resized;
         }
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageWriter jpgWriter = ImageIO.getImageWritersByFormatName("jpg").next();
-
         ImageWriteParam param = jpgWriter.getDefaultWriteParam();
+
         if (param.canWriteCompressed()) {
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(quality); // 0.0 = max compression, 1.0 = best quality
+            param.setCompressionQuality(initialQuality);
         }
 
         jpgWriter.setOutput(new MemoryCacheImageOutputStream(baos));
-        jpgWriter.write(null, new IIOImage(image, null, null), param);
+        jpgWriter.write(null, new IIOImage(originalImage, null, null), param);
         jpgWriter.dispose();
 
-        return baos.toByteArray();
+        byte[] compressed = baos.toByteArray();
+
+        // 🔁 Step 2: Recurse if still > 1MB — lower quality each pass
+        if (compressed.length > 1_000_000 && initialQuality > 0.1f) {
+            System.out.println("⚠️ Still large (" + (compressed.length / 1024) + "KB). Reducing quality...");
+            return compressImage(compressed, initialQuality - 0.2f);
+        }
+
+        return compressed;
     }
 }
