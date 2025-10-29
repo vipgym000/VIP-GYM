@@ -24,24 +24,32 @@ public class WhatsAppRedirectController {
     public RedirectView redirectToWhatsApp(
             @RequestParam String phoneNumber,
             @RequestParam(required = false) String nextDueDate) throws UnsupportedEncodingException {
-        
-        // Remove any non-digit characters from phone number
+
+        // 🧹 Clean the phone number — digits only, ensure no leading +
         String cleanedNumber = phoneNumber.replaceAll("[^\\d]", "");
-        
+
+        // ✅ Ensure country code (e.g., India => 91)
+        if (!cleanedNumber.startsWith("91") && cleanedNumber.length() == 10) {
+            cleanedNumber = "91" + cleanedNumber;
+        }
+
+        // 🧾 Generate the message
         String message;
-        if (nextDueDate != null) {
+        if (nextDueDate != null && !nextDueDate.isBlank()) {
             LocalDate dueDate = LocalDate.parse(nextDueDate);
             message = emailService.generateExpiryMessage(dueDate);
         } else {
-            message = "Hello! This is a message from VipGym.";
+            message = "Hello! 👋 This is a message from VipGym.";
         }
-        
-        // URL encode the message
-        String encodedMessage = URLEncoder.encode(message, "UTF-8");
-        
-        // Construct WhatsApp URL
-        String whatsappUrl = "https://wa.me/" + cleanedNumber + "?text=" + encodedMessage;
-        
+
+        // ✅ Encode only once
+        String encodedMessage = URLEncoder.encode(message, java.nio.charset.StandardCharsets.UTF_8);
+
+        // ✅ Use WhatsApp API URL — works on all mobile devices
+        String whatsappUrl = "https://api.whatsapp.com/send?phone=" + cleanedNumber + "&text=" + encodedMessage;
+
+        System.out.println("Redirecting to WhatsApp URL: " + whatsappUrl);
+
         return new RedirectView(whatsappUrl);
     }
 }
