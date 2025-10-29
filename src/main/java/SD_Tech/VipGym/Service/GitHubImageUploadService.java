@@ -17,6 +17,15 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
+import javax.imageio.IIOImage;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+
 @Service
 public class GitHubImageUploadService {
 
@@ -44,12 +53,20 @@ public class GitHubImageUploadService {
             return null;
         }
 
+        byte[] fileBytes = file.getBytes();
+
+        // ✅ Compress if file is larger than 1MB
+        if (fileBytes.length > 1_000_000) {
+            System.out.println("⚠️ File size " + (fileBytes.length / 1024) + "KB exceeds 1MB, compressing...");
+            fileBytes = compressImage(fileBytes, 0.6f); // 60% quality
+            System.out.println("✅ Compressed file size: " + (fileBytes.length / 1024) + "KB");
+        }
+
         String path = "uploads/profile_pics/" + fileName;
         String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, path);
 
-        String base64Content = Base64.getEncoder().encodeToString(file.getBytes());
+        String base64Content = Base64.getEncoder().encodeToString(fileBytes);
 
-        // Prepare request body
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("message", "Upload profile picture for " + fileName);
         requestBody.put("content", base64Content);
@@ -58,18 +75,16 @@ public class GitHubImageUploadService {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(githubToken);
 
-        // Check if file exists to get the SHA for updating
+        // Check if file exists (get SHA if updating)
         try {
             HttpEntity<Void> getRequest = new HttpEntity<>(headers);
             ResponseEntity<Map> getResponse = restTemplate.exchange(url, HttpMethod.GET, getRequest, Map.class);
             if (getResponse.getStatusCode().is2xxSuccessful() && getResponse.getBody() != null) {
                 String sha = (String) getResponse.getBody().get("sha");
-                requestBody.put("sha", sha); // Required for updating existing file
+                requestBody.put("sha", sha);
             }
         } catch (HttpClientErrorException.NotFound e) {
-            // File does not exist, no SHA needed — proceed to create new file
-        } catch (HttpClientErrorException e) {
-            throw new RuntimeException("Failed to check existing file on GitHub: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
+            // File doesn’t exist — proceed with new upload
         }
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
@@ -79,7 +94,7 @@ public class GitHubImageUploadService {
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 Map<String, Object> content = (Map<String, Object>) response.getBody().get("content");
-                return (String) content.get("download_url"); // May not be public for private repos
+                return (String) content.get("download_url");
             } else {
                 throw new RuntimeException("GitHub upload failed with status: " + response.getStatusCode());
             }
@@ -87,7 +102,7 @@ public class GitHubImageUploadService {
             throw new RuntimeException("GitHub upload failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
         }
     }
-    
+
     public void deleteAllReceipts() {
         String path = "uploads/profile_pics/receipts";
         String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, path);
@@ -183,5 +198,29 @@ public class GitHubImageUploadService {
             // Re-throw other exceptions as they might be real issues (e.g., auth, network)
             throw new RuntimeException("Failed to delete file: " + filePath, e);
         }
+    }
+    
+    private byte[] compressImage(byte[] imageBytes, float quality) throws IOException {
+        ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
+        BufferedImage image = ImageIO.read(bais);
+
+        if (image == null) {
+            throw new IOException("Invalid image file, cannot read for compression.");
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        ImageWriter jpgWriter = ImageIO.getImageWritersByFormatName("jpg").next();
+
+        ImageWriteParam param = jpgWriter.getDefaultWriteParam();
+        if (param.canWriteCompressed()) {
+            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            param.setCompressionQuality(quality); // 0.0 = max compression, 1.0 = best quality
+        }
+
+        jpgWriter.setOutput(new MemoryCacheImageOutputStream(baos));
+        jpgWriter.write(null, new IIOImage(image, null, null), param);
+        jpgWriter.dispose();
+
+        return baos.toByteArray();
     }
 }
