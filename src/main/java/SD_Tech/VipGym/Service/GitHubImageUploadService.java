@@ -200,7 +200,7 @@ public class GitHubImageUploadService {
         }
     }
     
-    private byte[] compressImage(byte[] imageBytes, float initialQuality) throws IOException {
+    private byte[] compressImage(byte[] imageBytes, float quality) throws IOException {
         ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
         BufferedImage originalImage = ImageIO.read(bais);
 
@@ -211,12 +211,13 @@ public class GitHubImageUploadService {
         int width = originalImage.getWidth();
         int height = originalImage.getHeight();
 
-        // 🔻 Step 1: Resize large images (downscale to max 1080px width)
-        int maxDimension = 1080;
+        // 🔻 Step 1: Resize to max 720px on longer side (very aggressive)
+        int maxDimension = 720;
         if (width > maxDimension || height > maxDimension) {
             float scale = Math.min((float) maxDimension / width, (float) maxDimension / height);
             int newWidth = Math.round(width * scale);
             int newHeight = Math.round(height * scale);
+
             BufferedImage resized = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
             resized.getGraphics().drawImage(originalImage, 0, 0, newWidth, newHeight, java.awt.Color.WHITE, null);
             originalImage = resized;
@@ -228,7 +229,7 @@ public class GitHubImageUploadService {
 
         if (param.canWriteCompressed()) {
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(initialQuality);
+            param.setCompressionQuality(quality); // start low, e.g. 0.5
         }
 
         jpgWriter.setOutput(new MemoryCacheImageOutputStream(baos));
@@ -237,12 +238,13 @@ public class GitHubImageUploadService {
 
         byte[] compressed = baos.toByteArray();
 
-        // 🔁 Step 2: Recurse if still > 1MB — lower quality each pass
-        if (compressed.length > 1_000_000 && initialQuality > 0.1f) {
-            System.out.println("⚠️ Still large (" + (compressed.length / 1024) + "KB). Reducing quality...");
-            return compressImage(compressed, initialQuality - 0.2f);
+        // 🔁 Step 2: If still > 2MB, reduce further
+        if (compressed.length > 2_000_000 && quality > 0.1f) {
+            System.out.println("⚠️ Still large (" + (compressed.length / 1024) + "KB), reducing further...");
+            return compressImage(compressed, quality - 0.2f);
         }
 
+        System.out.println("✅ Final size: " + (compressed.length / 1024) + " KB");
         return compressed;
     }
 }
