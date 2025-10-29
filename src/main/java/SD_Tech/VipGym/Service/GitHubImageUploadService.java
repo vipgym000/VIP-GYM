@@ -201,17 +201,22 @@ public class GitHubImageUploadService {
     }
     
     private byte[] compressImage(byte[] imageBytes, float quality) throws IOException {
-        ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
-        BufferedImage originalImage = ImageIO.read(bais);
-
-        if (originalImage == null) {
-            throw new IOException("Invalid or unsupported image format");
+        // 1️⃣ Reject too-large raw uploads (saves heap)
+        if (imageBytes.length > 10_000_000) {
+            throw new IOException("Image too large (>" + (imageBytes.length / 1024 / 1024) + " MB). Please upload below 10 MB.");
         }
 
-        int width = originalImage.getWidth();
-        int height = originalImage.getHeight();
+        // 2️⃣ Decode safely
+        ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
+        BufferedImage image = ImageIO.read(bais);
+        if (image == null) {
+            throw new IOException("Invalid image file, cannot decode.");
+        }
 
-        // 🔻 Step 1: Resize to max 720px on longer side (very aggressive)
+        int width = image.getWidth();
+        int height = image.getHeight();
+
+        // 3️⃣ Downscale extremely large images to keep memory low
         int maxDimension = 720;
         if (width > maxDimension || height > maxDimension) {
             float scale = Math.min((float) maxDimension / width, (float) maxDimension / height);
@@ -219,32 +224,34 @@ public class GitHubImageUploadService {
             int newHeight = Math.round(height * scale);
 
             BufferedImage resized = new BufferedImage(newWidth, newHeight, BufferedImage.TYPE_INT_RGB);
-            resized.getGraphics().drawImage(originalImage, 0, 0, newWidth, newHeight, java.awt.Color.WHITE, null);
-            originalImage = resized;
+            resized.getGraphics().drawImage(image, 0, 0, newWidth, newHeight, java.awt.Color.WHITE, null);
+            image.flush(); // free memory
+            image = resized;
         }
 
+        // 4️⃣ Compress JPEG
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ImageWriter jpgWriter = ImageIO.getImageWritersByFormatName("jpg").next();
         ImageWriteParam param = jpgWriter.getDefaultWriteParam();
-
         if (param.canWriteCompressed()) {
             param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-            param.setCompressionQuality(quality); // start low, e.g. 0.5
+            param.setCompressionQuality(quality); // 0.3–0.5 works well
         }
 
         jpgWriter.setOutput(new MemoryCacheImageOutputStream(baos));
-        jpgWriter.write(null, new IIOImage(originalImage, null, null), param);
+        jpgWriter.write(null, new IIOImage(image, null, null), param);
         jpgWriter.dispose();
+        image.flush();
 
         byte[] compressed = baos.toByteArray();
 
-        // 🔁 Step 2: If still > 2MB, reduce further
-        if (compressed.length > 2_000_000 && quality > 0.1f) {
-            System.out.println("⚠️ Still large (" + (compressed.length / 1024) + "KB), reducing further...");
-            return compressImage(compressed, quality - 0.2f);
+        // 5️⃣ Recursive fallback to ensure under 2 MB
+        if (compressed.length > 2_000_000 && quality > 0.2f) {
+            System.out.println("⚠️ Still " + (compressed.length / 1024) + " KB, compressing more...");
+            return compressImage(compressed, quality - 0.1f);
         }
 
-        System.out.println("✅ Final size: " + (compressed.length / 1024) + " KB");
+        System.out.println("✅ Final compressed size: " + (compressed.length / 1024) + " KB");
         return compressed;
     }
 }
