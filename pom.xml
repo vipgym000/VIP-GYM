@@ -87,12 +87,6 @@
 		    <artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
 
-		<dependency>
-		  <groupId>com.twelvemonkeys.imageio</groupId>
-		  <artifactId>imageio-heif</artifactId>
-		  <version>3.10.1</version>
-		</dependency>
-
     </dependencies>
 
     <build>
