@@ -17,15 +17,6 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
-import javax.imageio.stream.MemoryCacheImageOutputStream;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-
 @Service
 public class GitHubImageUploadService {
 
@@ -53,20 +44,12 @@ public class GitHubImageUploadService {
             return null;
         }
 
-        byte[] fileBytes = file.getBytes();
-
-        // ✅ Compress if file is larger than 1MB
-        if (fileBytes.length > 1_000_000) {
-            System.out.println("⚠️ File size " + (fileBytes.length / 1024) + "KB exceeds 1MB, compressing...");
-            fileBytes = compressImage(fileBytes, 0.6f); // 60% quality
-            System.out.println("✅ Compressed file size: " + (fileBytes.length / 1024) + "KB");
-        }
-
         String path = "uploads/profile_pics/" + fileName;
         String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, path);
 
-        String base64Content = Base64.getEncoder().encodeToString(fileBytes);
+        String base64Content = Base64.getEncoder().encodeToString(file.getBytes());
 
+        // Prepare request body
         Map<String, Object> requestBody = new HashMap<>();
         requestBody.put("message", "Upload profile picture for " + fileName);
         requestBody.put("content", base64Content);
@@ -75,16 +58,18 @@ public class GitHubImageUploadService {
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(githubToken);
 
-        // Check if file exists (get SHA if updating)
+        // Check if file exists to get the SHA for updating
         try {
             HttpEntity<Void> getRequest = new HttpEntity<>(headers);
             ResponseEntity<Map> getResponse = restTemplate.exchange(url, HttpMethod.GET, getRequest, Map.class);
             if (getResponse.getStatusCode().is2xxSuccessful() && getResponse.getBody() != null) {
                 String sha = (String) getResponse.getBody().get("sha");
-                requestBody.put("sha", sha);
+                requestBody.put("sha", sha); // Required for updating existing file
             }
         } catch (HttpClientErrorException.NotFound e) {
-            // File doesn’t exist — proceed with new upload
+            // File does not exist, no SHA needed — proceed to create new file
+        } catch (HttpClientErrorException e) {
+            throw new RuntimeException("Failed to check existing file on GitHub: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
         }
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
@@ -94,7 +79,7 @@ public class GitHubImageUploadService {
 
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 Map<String, Object> content = (Map<String, Object>) response.getBody().get("content");
-                return (String) content.get("download_url");
+                return (String) content.get("download_url"); // May not be public for private repos
             } else {
                 throw new RuntimeException("GitHub upload failed with status: " + response.getStatusCode());
             }
@@ -102,7 +87,7 @@ public class GitHubImageUploadService {
             throw new RuntimeException("GitHub upload failed: " + e.getStatusCode() + " - " + e.getResponseBodyAsString(), e);
         }
     }
-
+    
     public void deleteAllReceipts() {
         String path = "uploads/profile_pics/receipts";
         String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, path);
@@ -197,71 +182,6 @@ public class GitHubImageUploadService {
         } catch (Exception e) {
             // Re-throw other exceptions as they might be real issues (e.g., auth, network)
             throw new RuntimeException("Failed to delete file: " + filePath, e);
-        }
-    }
-    
-    private byte[] compressImage(byte[] imageBytes, float quality) throws IOException {
-        // 🚫 Reject too-large files right away
-        if (imageBytes.length > 10_000_000) {
-            throw new IOException("Image too large (" + (imageBytes.length / 1024 / 1024) + " MB). Please upload below 10 MB.");
-        }
-
-        // ✅ Use ImageInputStream to avoid full load
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
-             javax.imageio.stream.ImageInputStream iis = ImageIO.createImageInputStream(bais)) {
-
-            var readers = ImageIO.getImageReaders(iis);
-            if (!readers.hasNext()) throw new IOException("Unsupported image format.");
-
-            var reader = readers.next();
-            reader.setInput(iis, true);
-
-            // Read only a small thumbnail first
-            int origWidth = reader.getWidth(0);
-            int origHeight = reader.getHeight(0);
-
-            int maxDim = 720;
-            float scale = Math.min(1.0f, (float) maxDim / Math.max(origWidth, origHeight));
-
-            int newW = Math.round(origWidth * scale);
-            int newH = Math.round(origHeight * scale);
-
-            java.awt.image.BufferedImage image = reader.read(0);
-            reader.dispose();
-
-            if (scale < 1.0f) {
-                java.awt.image.BufferedImage resized = new java.awt.image.BufferedImage(newW, newH, java.awt.image.BufferedImage.TYPE_INT_RGB);
-                java.awt.Graphics2D g = resized.createGraphics();
-                g.drawImage(image, 0, 0, newW, newH, java.awt.Color.WHITE, null);
-                g.dispose();
-                image.flush();
-                image = resized;
-            }
-
-            // 🧠 Compress as JPEG
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-            var jpgWriter = ImageIO.getImageWritersByFormatName("jpg").next();
-            var param = jpgWriter.getDefaultWriteParam();
-            if (param.canWriteCompressed()) {
-                param.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
-                param.setCompressionQuality(quality);
-            }
-
-            jpgWriter.setOutput(new javax.imageio.stream.MemoryCacheImageOutputStream(baos));
-            jpgWriter.write(null, new javax.imageio.IIOImage(image, null, null), param);
-            jpgWriter.dispose();
-            image.flush();
-
-            byte[] compressed = baos.toByteArray();
-
-            // 🔁 Ensure it’s below 2 MB
-            if (compressed.length > 2_000_000 && quality > 0.2f) {
-                System.out.println("⚠️ Still " + (compressed.length / 1024) + " KB, retrying...");
-                return compressImage(compressed, quality - 0.1f);
-            }
-
-            System.out.println("✅ Final compressed size: " + (compressed.length / 1024) + " KB");
-            return compressed;
         }
     }
 }
