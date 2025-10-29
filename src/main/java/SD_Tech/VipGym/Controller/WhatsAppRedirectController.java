@@ -2,6 +2,7 @@ package SD_Tech.VipGym.Controller;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,6 +11,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.view.RedirectView;
 
 import SD_Tech.VipGym.Service.EmailService;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 public class WhatsAppRedirectController {
@@ -23,17 +26,18 @@ public class WhatsAppRedirectController {
     @GetMapping("/api/whatsapp/send")
     public RedirectView redirectToWhatsApp(
             @RequestParam String phoneNumber,
-            @RequestParam(required = false) String nextDueDate) throws UnsupportedEncodingException {
+            @RequestParam(required = false) String nextDueDate,
+            HttpServletRequest request) throws UnsupportedEncodingException {
 
-        // 🧹 Clean the phone number — digits only, ensure no leading +
+        // 🧹 1️⃣ Clean the number (remove +, spaces, dashes, etc.)
         String cleanedNumber = phoneNumber.replaceAll("[^\\d]", "");
 
-        // ✅ Ensure country code (e.g., India => 91)
-        if (!cleanedNumber.startsWith("91") && cleanedNumber.length() == 10) {
+        // 🪄 2️⃣ Auto-prepend country code (India: 91)
+        if (cleanedNumber.length() == 10) {
             cleanedNumber = "91" + cleanedNumber;
         }
 
-        // 🧾 Generate the message
+        // 🧾 3️⃣ Create message
         String message;
         if (nextDueDate != null && !nextDueDate.isBlank()) {
             LocalDate dueDate = LocalDate.parse(nextDueDate);
@@ -42,13 +46,22 @@ public class WhatsAppRedirectController {
             message = "Hello! 👋 This is a message from VipGym.";
         }
 
-        // ✅ Encode only once
-        String encodedMessage = URLEncoder.encode(message, java.nio.charset.StandardCharsets.UTF_8);
+        // 🔐 4️⃣ Encode safely
+        String encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8);
 
-        // ✅ Use WhatsApp API URL — works on all mobile devices
-        String whatsappUrl = "https://api.whatsapp.com/send?phone=" + cleanedNumber + "&text=" + encodedMessage;
+        // 🌐 5️⃣ Detect device type (mobile or desktop)
+        String userAgent = request.getHeader("User-Agent");
+        boolean isMobile = userAgent != null && userAgent.toLowerCase().matches(".*(android|iphone|ipad|mobile).*");
 
-        System.out.println("Redirecting to WhatsApp URL: " + whatsappUrl);
+        // 🪄 6️⃣ Choose proper base URL
+        String baseUrl = isMobile
+                ? "https://api.whatsapp.com/send"
+                : "https://web.whatsapp.com/send";
+
+        // ✅ 7️⃣ Build full redirect URL
+        String whatsappUrl = baseUrl + "?phone=" + cleanedNumber + "&text=" + encodedMessage;
+
+        System.out.println("Redirecting to WhatsApp: " + whatsappUrl);
 
         return new RedirectView(whatsappUrl);
     }
