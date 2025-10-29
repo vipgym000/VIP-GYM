@@ -1,20 +1,9 @@
 package SD_Tech.VipGym.Entity;
 
 import java.time.LocalDate;
-
 import com.fasterxml.jackson.annotation.JsonBackReference;
-
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
-import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import jakarta.persistence.*;
+import lombok.*;
 
 @Entity
 @Table(name = "payments")
@@ -27,14 +16,15 @@ public class Payment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(optional = false)
+    // ✅ Payment → User
+    @ManyToOne(fetch = FetchType.EAGER) // fetch user always
     @JoinColumn(name = "user_id")
-    @JsonBackReference
+    @JsonBackReference("user-payments")
     private User user;
 
     @Column(nullable = false)
     private LocalDate paymentDate;
-    
+
     @Column(length = 500)
     private String receiptUrl;
 
@@ -42,15 +32,14 @@ public class Payment {
     private Double amount;
 
     private String paymentMethod;
-
     private String remarks;
 
     @Column(nullable = false)
-    private Double paidAmount;      // Total paid by user till this payment (inclusive)
+    private Double paidAmount;
 
     @Column(nullable = false)
-    private Double pendingAmount;   // Remaining amount after this payment
+    private Double pendingAmount;
 
     @Column(nullable = false)
-    private LocalDate nextDueDate;  // Updated due date after payment
+    private LocalDate nextDueDate;
 }

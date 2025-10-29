@@ -1,6 +1,17 @@
 package SD_Tech.VipGym.Entity;
 
-import jakarta.persistence.*;
+import java.util.List;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.OneToMany;
+import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -10,6 +21,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"}) // ✅ prevents proxy serialization error
 public class Membership {
 
     @Id
@@ -24,4 +36,8 @@ public class Membership {
 
     @Column(nullable = false)
     private Double fee;     // Price for this membership plan
+    
+    @OneToMany(mappedBy = "membership")
+    @JsonIgnore // ✅ prevents infinite recursion when serializing User
+    private List<User> users;
 }

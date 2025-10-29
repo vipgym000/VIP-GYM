@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.hibernate.annotations.ColumnDefault;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 
 import jakarta.persistence.CascadeType;
@@ -28,6 +29,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler"}) // ✅ prevents ByteBuddy proxy serialization errors
 public class User {
 
     @Id
@@ -49,19 +51,38 @@ public class User {
     @Column(nullable = false)
     private LocalDate joinDate;
 
-    // Remove nextDueDate from here as it will be handled via payments
+    @Column(nullable = false)
+    private Double totalPaid = 0.0;
+
+    @Column(nullable = false)
+    private Double pendingAmount = 0.0;
+
+    @Column(nullable = false)
+    private LocalDate nextDueDate;
 
     private String profilePictureUrl;
 
+    // ✅ Active membership (current one in effect)
     @ManyToOne(optional = false)
     @JoinColumn(name = "membership_id")
-    @JsonManagedReference
+    @JsonManagedReference("membership-users")
     private Membership membership;
 
+    // ✅ Scheduled (future) membership — set only when switching
+    @ManyToOne
+    @JoinColumn(name = "next_membership_id")
+    private Membership nextMembership;
+
+    // ✅ Whether a membership switch is scheduled
+    @Column(nullable = false)
+    @ColumnDefault("false")
+    private boolean membershipSwitchPending = false;
+
+    // ✅ All payments linked to this user
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
-    @JsonManagedReference
+    @JsonManagedReference("user-payments")
     private List<Payment> payments;
-    
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @ColumnDefault("'ACTIVE'")

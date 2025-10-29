@@ -26,4 +26,9 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
     @Query("SELECT SUM(p.amount) FROM Payment p")
     Double findTotalRevenue();
+
+	List<Payment> findByUserIdOrderByPaymentDateDesc(Long id);
+
+	 @Query("SELECT p FROM Payment p JOIN FETCH p.user ORDER BY p.paymentDate DESC")
+	 List<Payment> findAllWithUser();
 }

@@ -89,7 +89,7 @@ public class GitHubImageUploadService {
     }
     
     public void deleteAllReceipts() {
-        String path = "receipts";
+        String path = "uploads/profile_pics/receipts";
         String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, path);
 
         HttpHeaders headers = new HttpHeaders();
@@ -99,18 +99,25 @@ public class GitHubImageUploadService {
         ResponseEntity<List> response = restTemplate.exchange(url, HttpMethod.GET, getRequest, List.class);
 
         if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
-            throw new RuntimeException("Failed to list receipts folder contents");
+            throw new RuntimeException("❌ Failed to list contents of folder: " + path);
         }
 
         List<Map<String, Object>> files = response.getBody();
 
+        int deletedCount = 0;
         for (Map<String, Object> file : files) {
             String filePath = (String) file.get("path");
             String sha = (String) file.get("sha");
 
-            // Delete the file
-            deleteFile(filePath, sha);
+            try {
+                deleteFile(filePath, sha);
+                deletedCount++;
+            } catch (Exception ex) {
+                System.err.println("⚠️ Failed to delete file: " + filePath + " (" + ex.getMessage() + ")");
+            }
         }
+
+        System.out.println("✅ Successfully deleted " + deletedCount + " receipt(s) from " + path);
     }
 
     private void deleteFile(String filePath, String sha) {
@@ -133,37 +140,48 @@ public class GitHubImageUploadService {
         }
     }
 
+    /**
+     * Deletes a single file from the GitHub repository.
+     * This method is robust and will not fail if the file does not exist.
+     *
+     * @param filePath The full path to the file in the repo (e.g., "receipts/receipt-1-123.png")
+     */
     public void deleteSingleReceiptFile(String filePath) {
-        String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, filePath);
+        try {
+            String url = String.format("https://api.github.com/repos/%s/%s/contents/%s", repoOwner, repoName, filePath);
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(githubToken);
-        HttpEntity<Void> getRequest = new HttpEntity<>(headers);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(githubToken);
+            HttpEntity<Void> getRequest = new HttpEntity<>(headers);
 
-        // First get file info to obtain SHA
-        ResponseEntity<Map> getResponse = restTemplate.exchange(url, HttpMethod.GET, getRequest, Map.class);
+            // First get file info to obtain SHA
+            ResponseEntity<Map> getResponse = restTemplate.exchange(url, HttpMethod.GET, getRequest, Map.class);
 
-        if (!getResponse.getStatusCode().is2xxSuccessful() || getResponse.getBody() == null) {
-            throw new RuntimeException("File not found: " + filePath);
-        }
+            if (!getResponse.getStatusCode().is2xxSuccessful() || getResponse.getBody() == null) {
+                throw new RuntimeException("File not found: " + filePath);
+            }
 
-        String sha = (String) getResponse.getBody().get("sha");
+            String sha = (String) getResponse.getBody().get("sha");
 
-        // Prepare delete request body
-        Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("message", "Delete receipt " + filePath);
-        requestBody.put("sha", sha);
+            // Prepare delete request body
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("message", "Delete file " + filePath);
+            requestBody.put("sha", sha);
 
-        HttpHeaders deleteHeaders = new HttpHeaders();
-        deleteHeaders.setContentType(MediaType.APPLICATION_JSON);
-        deleteHeaders.setBearerAuth(githubToken);
+            HttpHeaders deleteHeaders = new HttpHeaders();
+            deleteHeaders.setContentType(MediaType.APPLICATION_JSON);
+            deleteHeaders.setBearerAuth(githubToken);
 
-        HttpEntity<Map<String, Object>> deleteRequest = new HttpEntity<>(requestBody, deleteHeaders);
+            HttpEntity<Map<String, Object>> deleteRequest = new HttpEntity<>(requestBody, deleteHeaders);
 
-        ResponseEntity<Map> deleteResponse = restTemplate.exchange(url, HttpMethod.DELETE, deleteRequest, Map.class);
+            restTemplate.exchange(url, HttpMethod.DELETE, deleteRequest, Map.class);
 
-        if (!deleteResponse.getStatusCode().is2xxSuccessful()) {
-            throw new RuntimeException("Failed to delete file: " + filePath);
+        } catch (HttpClientErrorException.NotFound e) {
+            // ✅ Gracefully handle case where file doesn't exist. This is key for robust cleanup.
+            System.err.println("INFO: File not found on GitHub, skipping deletion: " + filePath);
+        } catch (Exception e) {
+            // Re-throw other exceptions as they might be real issues (e.g., auth, network)
+            throw new RuntimeException("Failed to delete file: " + filePath, e);
         }
     }
 }
