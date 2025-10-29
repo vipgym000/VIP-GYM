@@ -29,15 +29,15 @@ public class WhatsAppRedirectController {
             @RequestParam(required = false) String nextDueDate,
             HttpServletRequest request) throws UnsupportedEncodingException {
 
-        // 🧹 1️⃣ Clean the number (remove +, spaces, dashes, etc.)
+        // 🧹 1️⃣ Clean input (remove +, spaces, brackets, dashes, etc.)
         String cleanedNumber = phoneNumber.replaceAll("[^\\d]", "");
 
-        // 🪄 2️⃣ Auto-prepend country code (India: 91)
+        // ☎️ 2️⃣ Ensure country code (default to India 91 if 10 digits)
         if (cleanedNumber.length() == 10) {
             cleanedNumber = "91" + cleanedNumber;
         }
 
-        // 🧾 3️⃣ Create message
+        // 🧾 3️⃣ Generate message text
         String message;
         if (nextDueDate != null && !nextDueDate.isBlank()) {
             LocalDate dueDate = LocalDate.parse(nextDueDate);
@@ -49,20 +49,12 @@ public class WhatsAppRedirectController {
         // 🔐 4️⃣ Encode safely
         String encodedMessage = URLEncoder.encode(message, StandardCharsets.UTF_8);
 
-        // 🌐 5️⃣ Detect device type (mobile or desktop)
-        String userAgent = request.getHeader("User-Agent");
-        boolean isMobile = userAgent != null && userAgent.toLowerCase().matches(".*(android|iphone|ipad|mobile).*");
+        // 🌐 5️⃣ Build *universal WhatsApp link* (works on both PC + mobile)
+        String whatsappUrl = "https://wa.me/" + cleanedNumber + "?text=" + encodedMessage;
 
-        // 🪄 6️⃣ Choose proper base URL
-        String baseUrl = isMobile
-                ? "https://api.whatsapp.com/send"
-                : "https://web.whatsapp.com/send";
+        System.out.println("✅ Redirecting to WhatsApp: " + whatsappUrl);
 
-        // ✅ 7️⃣ Build full redirect URL
-        String whatsappUrl = baseUrl + "?phone=" + cleanedNumber + "&text=" + encodedMessage;
-
-        System.out.println("Redirecting to WhatsApp: " + whatsappUrl);
-
+        // 🚀 6️⃣ Redirect to WhatsApp (works across platforms)
         return new RedirectView(whatsappUrl);
     }
 }
