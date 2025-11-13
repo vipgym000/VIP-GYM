@@ -1,12 +1,12 @@
 package SD_Tech.VipGym.Service;
 
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.Collections;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -30,26 +30,28 @@ public class GoogleDriveUploadService {
 
     private static final String APPLICATION_NAME = "VipGymUploader";
     private static final JsonFactory JSON_FACTORY = GsonFactory.getDefaultInstance();
-    private static final java.io.File CREDENTIALS_FILE_PATH = new java.io.File("src/main/resources/credentials.json");
-    private static final java.io.File TOKENS_DIRECTORY_PATH = new java.io.File("tokens");
-
     private static final List<String> SCOPES = Collections.singletonList(DriveScopes.DRIVE_FILE);
-
-    private Drive driveService;
-
-    public GoogleDriveUploadService() throws Exception {
+    
+    private final Drive driveService;
+    
+    public GoogleDriveUploadService(@Value("${google.drive.folder.id}") String folderId) throws Exception {
         this.driveService = getDriveService();
     }
 
-    private static Credential getCredentials() throws Exception {
+    private Credential getCredentials() throws Exception {
         var HTTP_TRANSPORT = GoogleNetHttpTransport.newTrustedTransport();
-
-        InputStream in = new FileInputStream(CREDENTIALS_FILE_PATH);
+        
+        // Load credentials from classpath instead of file system
+        InputStream in = GoogleDriveUploadService.class.getResourceAsStream("/credentials.json");
+        if (in == null) {
+            throw new IOException("Credentials file not found in classpath: /credentials.json");
+        }
+        
         GoogleClientSecrets clientSecrets = GoogleClientSecrets.load(JSON_FACTORY, new InputStreamReader(in));
 
         GoogleAuthorizationCodeFlow flow = new GoogleAuthorizationCodeFlow.Builder(
                 HTTP_TRANSPORT, JSON_FACTORY, clientSecrets, SCOPES)
-                .setDataStoreFactory(new FileDataStoreFactory(TOKENS_DIRECTORY_PATH))
+                .setDataStoreFactory(new FileDataStoreFactory(new java.io.File(System.getProperty("java.io.tmpdir"), "drive-tokens")))
                 .setAccessType("offline")
                 .build();
 
@@ -57,7 +59,7 @@ public class GoogleDriveUploadService {
         return new AuthorizationCodeInstalledApp(flow, receiver).authorize("user");
     }
 
-    private static Drive getDriveService() throws Exception {
+    private Drive getDriveService() throws Exception {
         var HTTP_TRANSPORT = GoogleNetHttpTransport.newTrustedTransport();
         Credential credential = getCredentials();
         return new Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, credential)
@@ -89,18 +91,19 @@ public class GoogleDriveUploadService {
             System.out.printf("Found file: %s (%s)\n", file.getName(), file.getId());
         }
     }
+    
     public String uploadToDrive(MultipartFile multipartFile, String fileName) throws IOException {
         File fileMetadata = new File();
         fileMetadata.setName(fileName);
 
-        // 1️⃣ Upload the file
+        // Upload the file
         File uploadedFile = driveService.files()
                 .create(fileMetadata, new InputStreamContent(
                         multipartFile.getContentType(), multipartFile.getInputStream()))
                 .setFields("id, name")
                 .execute();
 
-        // 2️⃣ Make the file public (anyone with link can view)
+        // Make the file public
         com.google.api.services.drive.model.Permission publicPermission =
                 new com.google.api.services.drive.model.Permission()
                         .setType("anyone")
@@ -110,7 +113,7 @@ public class GoogleDriveUploadService {
                 .create(uploadedFile.getId(), publicPermission)
                 .execute();
 
-        // 3️⃣ Return the public link
+        // Return the public link
         return "https://drive.google.com/file/d/" + uploadedFile.getId() + "/view?usp=sharing";
     }
 
