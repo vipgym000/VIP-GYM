@@ -16,7 +16,7 @@ import SD_Tech.VipGym.Entity.User;
 import SD_Tech.VipGym.Repository.PaymentRepository;
 import SD_Tech.VipGym.Repository.UserRepository;
 import SD_Tech.VipGym.Service.ByteArrayMultipartFile;
-import SD_Tech.VipGym.Service.GitHubImageUploadService;
+import SD_Tech.VipGym.Service.GoogleDriveUploadService; // ✅ replaced GitHubImageUploadService
 import SD_Tech.VipGym.Service.PaymentService;
 import SD_Tech.VipGym.Service.ReceiptImageService;
 import jakarta.persistence.EntityGraph;
@@ -42,7 +42,7 @@ public class PaymentController {
     private ReceiptImageService receiptImageService;
 
     @Autowired
-    private GitHubImageUploadService gitHubImageUploadService;
+    private GoogleDriveUploadService googleDriveUploadService; // ✅ new service injected
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -52,13 +52,11 @@ public class PaymentController {
     @Transactional
     public ResponseEntity<?> getUserPayments(@PathVariable Long userId) {
         try {
-            // Check user existence
             User user = userRepository.findById(userId).orElse(null);
             if (user == null) {
                 return ResponseEntity.status(404).body(Map.of("message", "User not found with ID: " + userId));
             }
 
-            // Fetch payments (EAGER fetch graph for user info)
             EntityGraph<?> graph = entityManager.createEntityGraph(Payment.class);
             graph.addAttributeNodes("id", "paymentDate", "amount", "paymentMethod", "receiptUrl", "paidAmount", "pendingAmount", "nextDueDate");
             graph.addSubgraph("user").addAttributeNodes("id", "fullName", "email", "pendingAmount", "totalPaid");
@@ -71,7 +69,6 @@ public class PaymentController {
 
             Integer daysLeft = paymentService.getDaysUntilPlanExpires(payments);
 
-            // ✅ Return user + payments + days left
             Map<String, Object> response = new HashMap<>();
             response.put("user", user);
             response.put("payments", payments);
@@ -85,7 +82,7 @@ public class PaymentController {
         }
     }
 
-    // ✅ Mark a new payment (includes receipt upload)
+    // ✅ Mark a new payment (includes Drive upload)
     @PostMapping("/mark")
     @Transactional
     public ResponseEntity<?> markPayment(@RequestBody Map<String, Object> paymentData) {
@@ -105,11 +102,9 @@ public class PaymentController {
                 return ResponseEntity.status(404).body(Map.of("message", "User not found with ID: " + userId));
             }
 
-            // ✅ Calculate payment totals
             double newPaidAmount = user.getTotalPaid() + amount;
             double newPendingAmount = Math.max(user.getPendingAmount() - amount, 0.0);
 
-            // ✅ Create payment record
             Payment payment = new Payment();
             payment.setUser(user);
             payment.setPaymentDate(LocalDate.now());
@@ -121,26 +116,21 @@ public class PaymentController {
 
             // ✅ Handle next due date logic
             if (nextDueDate != null) {
-                // If user explicitly provided new due date → use it
                 payment.setNextDueDate(nextDueDate);
                 user.setNextDueDate(nextDueDate);
             } else {
-                // If user didn’t change due date, keep the same one
                 if (newPendingAmount == 0) {
-                    // ✅ Payment fully clears pending amount — keep same due date
                     payment.setNextDueDate(user.getNextDueDate());
                 } else if (user.getMembership() != null && user.getNextDueDate() == null) {
-                    // If user never had due date, calculate new
                     LocalDate calculatedDueDate = LocalDate.now().plusMonths(user.getMembership().getDurationInMonths());
                     payment.setNextDueDate(calculatedDueDate);
                     user.setNextDueDate(calculatedDueDate);
                 } else {
-                    // Default: keep current due date unchanged
                     payment.setNextDueDate(user.getNextDueDate());
                 }
             }
 
-            // ✅ Generate receipt
+            // ✅ Generate receipt image
             byte[] receiptImage = receiptImageService.generateReceiptImage(
                     user.getFullName(),
                     user.getEmail(),
@@ -150,12 +140,23 @@ public class PaymentController {
                     paymentMethod
             );
 
+            // ✅ Upload receipt to Google Drive
             String receiptFileName = "receipt_" + user.getId() + "_" + System.currentTimeMillis() + ".png";
             MultipartFile multipartFile = new ByteArrayMultipartFile(receiptImage, receiptFileName, "image/png");
-            String uploadedUrl = gitHubImageUploadService.uploadImage(multipartFile, "receipts/" + receiptFileName);
-            payment.setReceiptUrl(uploadedUrl);
 
-            // ✅ Save updates
+            String uploadedUrl = null;
+            try {
+                System.out.println("📤 Uploading receipt for payment of user: " + user.getEmail());
+                uploadedUrl = googleDriveUploadService.uploadToDrive(multipartFile, receiptFileName);
+                payment.setReceiptUrl(uploadedUrl);
+                System.out.println("✅ Receipt uploaded successfully: " + uploadedUrl);
+            } catch (Exception e) {
+                System.err.println("⚠️ Receipt upload failed: " + e.getMessage());
+                e.printStackTrace();
+                // Continue with payment processing even if receipt upload fails
+            }
+
+            // ✅ Save payment and user updates
             paymentRepository.save(payment);
             user.setTotalPaid(newPaidAmount);
             user.setPendingAmount(newPendingAmount);
@@ -182,11 +183,11 @@ public class PaymentController {
         try {
             Query query = entityManager.createNativeQuery(
                     "SELECT EXTRACT(MONTH FROM payment_date) AS month, " +
-                    "EXTRACT(YEAR FROM payment_date) AS year, " +
-                    "SUM(amount) AS total " +
-                    "FROM payments " +
-                    "GROUP BY EXTRACT(YEAR FROM payment_date), EXTRACT(MONTH FROM payment_date) " +
-                    "ORDER BY year, month"
+                            "EXTRACT(YEAR FROM payment_date) AS year, " +
+                            "SUM(amount) AS total " +
+                            "FROM payments " +
+                            "GROUP BY EXTRACT(YEAR FROM payment_date), EXTRACT(MONTH FROM payment_date) " +
+                            "ORDER BY year, month"
             );
 
             @SuppressWarnings("unchecked")
@@ -207,10 +208,10 @@ public class PaymentController {
             revenueData.put("december", 0.0);
 
             Map<Integer, String> monthNames = Map.ofEntries(
-                Map.entry(1, "january"), Map.entry(2, "february"), Map.entry(3, "march"),
-                Map.entry(4, "april"), Map.entry(5, "may"), Map.entry(6, "june"),
-                Map.entry(7, "july"), Map.entry(8, "august"), Map.entry(9, "september"),
-                Map.entry(10, "october"), Map.entry(11, "november"), Map.entry(12, "december")
+                    Map.entry(1, "january"), Map.entry(2, "february"), Map.entry(3, "march"),
+                    Map.entry(4, "april"), Map.entry(5, "may"), Map.entry(6, "june"),
+                    Map.entry(7, "july"), Map.entry(8, "august"), Map.entry(9, "september"),
+                    Map.entry(10, "october"), Map.entry(11, "november"), Map.entry(12, "december")
             );
 
             double totalRevenue = 0.0;

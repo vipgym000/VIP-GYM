@@ -26,7 +26,7 @@ import SD_Tech.VipGym.Repository.MembershipRepository;
 import SD_Tech.VipGym.Repository.PaymentRepository;
 import SD_Tech.VipGym.Repository.UserRepository;
 import SD_Tech.VipGym.Service.ByteArrayMultipartFile;
-import SD_Tech.VipGym.Service.GitHubImageUploadService;
+import SD_Tech.VipGym.Service.GoogleDriveUploadService;
 import SD_Tech.VipGym.Service.ReceiptImageService;
 import jakarta.persistence.EntityGraph;
 import jakarta.persistence.EntityManager;
@@ -46,20 +46,16 @@ public class UserController {
     private MembershipRepository membershipRepository;
 
     @Autowired
-    private GitHubImageUploadService gitHubImageUploadService;
+    private GoogleDriveUploadService googleDriveUploadService;
 
     @Autowired
     private ReceiptImageService receiptImageService;
-    
+
     @PersistenceContext
     private EntityManager entityManager;
 
-    // ... (registerUser, getAllUsers, getUserById, blockUser, unblockUser methods remain the same) ...
-
     /**
-     * Register a new user with membership and payment details.
-     * Accepts profile picture as a file (uploaded to GitHub).
-     * Generates and uploads payment receipt image to GitHub, returns its URL.
+     * ✅ Register a new user with membership, payment, and Drive uploads.
      */
     @PostMapping(value = "/register", consumes = {"multipart/form-data"})
     @Transactional
@@ -86,19 +82,23 @@ public class UserController {
                 return ResponseEntity.badRequest().body("Invalid membership selected.");
             }
 
-            // 4️⃣ Calculate next due date *before saving user*
+            // 4️⃣ Calculate next due date
             LocalDate nextDueDate = request.getJoinDate().plusMonths(membership.getDurationInMonths());
 
-            // 5️⃣ Upload profile picture (optional)
+            // 5️⃣ Upload profile picture to Google Drive
             String uploadedImageUrl = null;
             if (profilePicture != null && !profilePicture.isEmpty()) {
                 try {
-                    uploadedImageUrl = gitHubImageUploadService.uploadImage(
+                    System.out.println("📤 Uploading profile picture for user: " + request.getEmail());
+                    uploadedImageUrl = googleDriveUploadService.uploadToDrive(
                             profilePicture,
-                            "user-" + request.getEmail().replace("@", "_") + ".jpg"
+                            "profile-" + request.getEmail().replace("@", "_") + ".jpg"
                     );
+                    System.out.println("✅ Profile picture uploaded successfully: " + uploadedImageUrl);
                 } catch (Exception ex) {
                     System.err.println("⚠️ Profile picture upload failed: " + ex.getMessage());
+                    ex.printStackTrace();
+                    // Continue with user registration even if image upload fails
                 }
             }
 
@@ -112,7 +112,7 @@ public class UserController {
                 return ResponseEntity.badRequest().body("Invalid status. Must be 'ACTIVE' or 'INACTIVE'.");
             }
 
-            // 7️⃣ Create and save new user (with all non-null fields)
+            // 7️⃣ Create user
             User user = new User();
             user.setFullName(request.getFullName());
             user.setEmail(request.getEmail());
@@ -122,13 +122,10 @@ public class UserController {
             user.setProfilePictureUrl(uploadedImageUrl);
             user.setMembership(membership);
             user.setStatus(status);
-
-            // ✅ Set these BEFORE saving (to satisfy DB constraints)
             user.setNextDueDate(nextDueDate);
             user.setTotalPaid(0.0);
             user.setPendingAmount(request.getTotalFee());
-
-            user = userRepository.save(user); // ✅ will not throw now
+            user = userRepository.save(user);
 
             // 8️⃣ Compute payment progress
             double totalPaidSoFar = paymentRepository.sumAmountByUserId(user.getId()) == null
@@ -137,7 +134,7 @@ public class UserController {
             double newPaidAmount = totalPaidSoFar + request.getAmount();
             double newPendingAmount = Math.max(request.getTotalFee() - newPaidAmount, 0.0);
 
-            // 9️⃣ Create Payment entity
+            // 9️⃣ Create payment
             Payment payment = new Payment();
             payment.setUser(user);
             payment.setPaymentDate(request.getPaymentDate());
@@ -148,7 +145,7 @@ public class UserController {
             payment.setPendingAmount(newPendingAmount);
             payment.setNextDueDate(nextDueDate);
 
-            // 🔟 Generate and upload receipt safely
+            // 🔟 Generate and upload receipt to Drive
             String receiptUrl = null;
             try {
                 byte[] receiptImageBytes = receiptImageService.generateReceiptImage(
@@ -162,22 +159,25 @@ public class UserController {
 
                 String receiptFileName = "receipt-" + user.getId() + "-" + System.currentTimeMillis() + ".png";
                 MultipartFile receiptFile = new ByteArrayMultipartFile(receiptImageBytes, receiptFileName, "image/png");
-                receiptUrl = gitHubImageUploadService.uploadImage(receiptFile, "receipts/" + receiptFileName);
+
+                System.out.println("📤 Uploading receipt for user: " + user.getEmail());
+                receiptUrl = googleDriveUploadService.uploadToDrive(receiptFile, receiptFileName);
                 payment.setReceiptUrl(receiptUrl);
+                System.out.println("✅ Receipt uploaded successfully: " + receiptUrl);
             } catch (Exception ex) {
                 System.err.println("⚠️ Receipt upload failed: " + ex.getMessage());
+                ex.printStackTrace();
+                // Continue with payment processing even if receipt upload fails
             }
 
-            // 11️⃣ Save payment
+            // 11️⃣ Save payment and update user totals
             paymentRepository.save(payment);
-
-            // 12️⃣ Update user progress summary
             user.setTotalPaid(newPaidAmount);
             user.setPendingAmount(newPendingAmount);
             user.setNextDueDate(nextDueDate);
             userRepository.save(user);
 
-            // 13️⃣ Response
+            // ✅ Response
             Map<String, Object> response = new HashMap<>();
             response.put("message", "User registered successfully");
             response.put("userId", user.getId());
@@ -193,171 +193,127 @@ public class UserController {
         }
     }
 
-    // Fetch all users with their payments and membership details
+    // ✅ Fetch all users with membership and payment details
     @GetMapping("/all")
     @Transactional
     public ResponseEntity<?> getAllUsers() {
         try {
             List<User> users = userRepository.findAll();
-
             for (User user : users) {
-                // Ensure membership is fetched
                 if (user.getMembership() != null) {
-                    user.setMembership(
-                        membershipRepository.findById(user.getMembership().getId()).orElse(null)
-                    );
+                    user.setMembership(membershipRepository.findById(user.getMembership().getId()).orElse(null));
                 }
 
-                // Fetch and attach payments safely
                 List<Payment> payments = paymentRepository.findByUserIdOrderByPaymentDateDesc(user.getId());
-                if (user.getPayments() != null) {
+                if (user.getPayments() == null) {
+                    user.setPayments(payments);
+                } else {
                     user.getPayments().clear();
                     user.getPayments().addAll(payments);
-                } else {
-                    user.setPayments(payments);
                 }
             }
-
             return ResponseEntity.ok(users);
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.status(500).body("Failed to fetch users: " + e.getMessage());
         }
     }
-    
-    // Get user with all details by ID
+
+    // ✅ Get single user with all related info
     @GetMapping("/{id}")
     @Transactional
     public ResponseEntity<?> getUserById(@PathVariable Long id) {
         try {
-            // Create an entity graph to fetch user with their payments and membership
             EntityGraph<?> graph = entityManager.createEntityGraph(User.class);
             graph.addAttributeNodes("fullName", "email", "mobileNumber", "joinDate", "status", "totalPaid", "pendingAmount", "nextDueDate", "profilePictureUrl");
             graph.addSubgraph("membership").addAttributeNodes("id", "name", "durationInMonths", "fee");
-            graph.addSubgraph("payments").addAttributeNodes("id", "paymentDate", "amount", "paymentMethod", "receiptUrl", "paidAmount", "pendingAmount", "nextDueDate");
-            
+            graph.addSubgraph("payments").addAttributeNodes("id", "paymentDate", "amount", "paymentMethod", "receiptUrl");
+
             User user = entityManager.createQuery("SELECT u FROM User u WHERE u.id = :id", User.class)
                     .setParameter("id", id)
                     .setHint("jakarta.persistence.fetchgraph", graph)
                     .getSingleResult();
-            
-            if (user == null) {
-                return ResponseEntity.status(404).body("User not found with ID: " + id);
-            }
-            
+
+            if (user == null) return ResponseEntity.status(404).body("User not found with ID: " + id);
             return ResponseEntity.ok(user);
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.status(500).body("Failed to fetch user: " + e.getMessage());
         }
     }
-    
-    // ✅ FINAL CORRECTED VERSION: Delete user and all related data
- // ✅ FINAL FIXED VERSION — deletes user + all receipts under /uploads/profile_pics/receipts/
+
+    // ✅ Delete user + profile + receipts from Google Drive
     @DeleteMapping("/delete/{id}")
     @Transactional
     public ResponseEntity<?> deleteUser(@PathVariable Long id) {
         try {
-            // 1️⃣ Fetch user
             User user = userRepository.findById(id).orElse(null);
             if (user == null) {
                 return ResponseEntity.status(404).body("User not found with ID: " + id);
             }
 
-            // 2️⃣ Fetch all payments first
             List<Payment> payments = paymentRepository.findByUserId(id);
-            System.out.println("🧾 Found " + payments.size() + " payments to delete receipts for.");
-
-            // 3️⃣ Delete each payment’s receipt from GitHub
             for (Payment payment : payments) {
-                if (payment.getReceiptUrl() != null && !payment.getReceiptUrl().isBlank()) {
+                if (payment.getReceiptUrl() != null && payment.getReceiptUrl().contains("id=")) {
                     try {
-                        // Extract the filename safely
-                        String fileName = payment.getReceiptUrl()
-                                .substring(payment.getReceiptUrl().lastIndexOf("/") + 1);
-
-                        // ✅ Match your actual folder structure
-                        String filePath = "uploads/profile_pics/receipts/" + fileName;
-
-                        gitHubImageUploadService.deleteSingleReceiptFile(filePath);
-                        System.out.println("✅ Deleted receipt: " + filePath);
+                        String fileId = payment.getReceiptUrl().split("id=")[1];
+                        googleDriveUploadService.deleteFile(fileId);
                     } catch (Exception e) {
-                        System.err.println("⚠️ Failed to delete receipt for payment ID " + payment.getId() + ": " + e.getMessage());
+                        System.err.println("⚠️ Failed to delete receipt: " + e.getMessage());
                     }
                 }
             }
 
-            // 4️⃣ Delete user’s profile picture
-            if (user.getProfilePictureUrl() != null && !user.getProfilePictureUrl().isBlank()) {
+            if (user.getProfilePictureUrl() != null && user.getProfilePictureUrl().contains("id=")) {
                 try {
-                    String fileName = user.getProfilePictureUrl()
-                            .substring(user.getProfilePictureUrl().lastIndexOf("/") + 1);
-
-                    String profilePath = "uploads/profile_pics/" + fileName;
-
-                    gitHubImageUploadService.deleteSingleReceiptFile(profilePath);
-                    System.out.println("✅ Deleted profile picture: " + profilePath);
+                    String fileId = user.getProfilePictureUrl().split("id=")[1];
+                    googleDriveUploadService.deleteFile(fileId);
                 } catch (Exception e) {
-                    System.err.println("⚠️ Failed to delete profile picture for user ID " + id + ": " + e.getMessage());
+                    System.err.println("⚠️ Failed to delete profile picture: " + e.getMessage());
                 }
             }
 
-            // 5️⃣ Delete all payment records
             paymentRepository.deleteAll(payments);
-
-            // 6️⃣ Finally, delete user
             userRepository.deleteById(id);
-            System.out.println("🗑️ Deleted user record from DB for ID: " + id);
 
-            // 7️⃣ Success response
-            return ResponseEntity.ok("✅ User and all related data (payments, receipts, profile picture) deleted successfully. ID: " + id);
-
+            return ResponseEntity.ok("✅ User and all Drive files deleted successfully. ID: " + id);
         } catch (Exception e) {
             e.printStackTrace();
-            return ResponseEntity.status(500)
-                    .body("❌ Failed to delete user and related data: " + e.getMessage());
+            return ResponseEntity.status(500).body("❌ Failed to delete user: " + e.getMessage());
         }
     }
 
-    // 🔹 Block user (mark as INACTIVE)
+    // ✅ Block user
     @PostMapping("/block/{id}")
     @Transactional
     public ResponseEntity<?> blockUser(@PathVariable Long id) {
         try {
             User user = userRepository.findById(id).orElse(null);
-            if (user == null) {
-                return ResponseEntity.status(404).body("User not found with ID: " + id);
-            }
+            if (user == null) return ResponseEntity.status(404).body("User not found with ID: " + id);
 
             user.setStatus(UserStatus.INACTIVE);
             userRepository.save(user);
-            return ResponseEntity.ok("User has been blocked successfully (ID: " + id + ")");
+            return ResponseEntity.ok("🚫 User blocked successfully (ID: " + id + ")");
         } catch (Exception e) {
-            e.printStackTrace();
             return ResponseEntity.internalServerError().body("Failed to block user: " + e.getMessage());
         }
     }
-    
-    // 🔹 Unblock user (mark as ACTIVE again)
+
+    // ✅ Unblock user
     @PostMapping("/unblock/{id}")
     @Transactional
     public ResponseEntity<?> unblockUser(@PathVariable Long id) {
         try {
             User user = userRepository.findById(id).orElse(null);
-            if (user == null) {
-                return ResponseEntity.status(404).body("User not found with ID: " + id);
-            }
+            if (user == null) return ResponseEntity.status(404).body("User not found with ID: " + id);
 
-            if (user.getStatus() == UserStatus.ACTIVE) {
+            if (user.getStatus() == UserStatus.ACTIVE)
                 return ResponseEntity.badRequest().body("User is already active.");
-            }
 
             user.setStatus(UserStatus.ACTIVE);
             userRepository.save(user);
-
-            return ResponseEntity.ok("✅ User has been unblocked successfully (ID: " + id + ")");
+            return ResponseEntity.ok("✅ User unblocked successfully (ID: " + id + ")");
         } catch (Exception e) {
-            e.printStackTrace();
             return ResponseEntity.internalServerError().body("Failed to unblock user: " + e.getMessage());
         }
     }

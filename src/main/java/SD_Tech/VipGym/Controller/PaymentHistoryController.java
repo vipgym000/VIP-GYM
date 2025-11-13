@@ -22,7 +22,7 @@ import SD_Tech.VipGym.Entity.Payment;
 import SD_Tech.VipGym.Entity.User;
 import SD_Tech.VipGym.Repository.PaymentRepository;
 import SD_Tech.VipGym.Repository.UserRepository;
-import SD_Tech.VipGym.Service.GitHubImageUploadService;
+import SD_Tech.VipGym.Service.GoogleDriveUploadService; // ✅ new Drive service
 import jakarta.persistence.EntityGraph;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -38,7 +38,7 @@ public class PaymentHistoryController {
     private UserRepository userRepository;
 
     @Autowired
-    private GitHubImageUploadService gitHubImageUploadService;
+    private GoogleDriveUploadService googleDriveUploadService; // ✅ replacing GitHub service
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -48,7 +48,7 @@ public class PaymentHistoryController {
     @Transactional
     public ResponseEntity<?> getAllPaymentHistory() {
         try {
-            List<Payment> payments = paymentRepository.findAllWithUser(); // custom join fetch or repository query
+            List<Payment> payments = paymentRepository.findAllWithUser();
 
             List<Map<String, Object>> result = payments.stream().map(p -> {
                 Map<String, Object> map = new HashMap<>();
@@ -98,7 +98,6 @@ public class PaymentHistoryController {
                     .setHint("jakarta.persistence.fetchgraph", graph)
                     .getResultList();
 
-            // Convert to DTOs
             List<PaymentHistoryDTO> paymentDTOs = payments.stream().map(p -> new PaymentHistoryDTO(
                     p.getId(),
                     p.getPaymentDate(),
@@ -118,7 +117,7 @@ public class PaymentHistoryController {
         }
     }
 
- // ✅ Delete a single payment record (without affecting pending amounts)
+    // ✅ Delete a single payment record (Drive-safe)
     @DeleteMapping("/history/{paymentId}")
     @Transactional
     public ResponseEntity<?> deletePayment(@PathVariable Long paymentId) {
@@ -130,31 +129,27 @@ public class PaymentHistoryController {
 
             User user = payment.getUser();
 
-            // 1️⃣ Unlink payment from user safely
-            if (user != null) {
-                if (user.getPayments() != null) {
-                    user.getPayments().remove(payment);
-                }
-
-                // ❌ Do NOT reset or modify pending/total amounts here
-                // Leave user’s financial summary unchanged
+            if (user != null && user.getPayments() != null) {
+                user.getPayments().remove(payment);
                 userRepository.save(user);
             }
 
-            // 2️⃣ Delete GitHub receipt (optional)
+            // ✅ Delete from Google Drive
             if (payment.getReceiptUrl() != null && !payment.getReceiptUrl().isBlank()) {
                 try {
-                    String fileName = payment.getReceiptUrl().substring(payment.getReceiptUrl().lastIndexOf("/") + 1);
-                    gitHubImageUploadService.deleteSingleReceiptFile("uploads/profile_pics/receipts/" + fileName);
+                    String fileId = extractFileIdFromUrl(payment.getReceiptUrl());
+                    if (fileId != null) {
+                        googleDriveUploadService.deleteFile(fileId);
+                        System.out.println("✅ Deleted Drive file: " + fileId);
+                    }
                 } catch (Exception ex) {
-                    System.err.println("⚠️ Failed to delete receipt for payment ID " + paymentId + ": " + ex.getMessage());
+                    System.err.println("⚠️ Failed to delete Drive file for payment " + paymentId + ": " + ex.getMessage());
                 }
             }
 
-            // 3️⃣ Delete payment record
             paymentRepository.delete(payment);
+            return ResponseEntity.ok("✅ Payment deleted successfully (ID: " + paymentId + ").");
 
-            return ResponseEntity.ok("✅ Payment deleted successfully (ID: " + paymentId + ") — user balance unchanged.");
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.status(500)
@@ -162,6 +157,13 @@ public class PaymentHistoryController {
         }
     }
 
+    // ✅ Helper method to extract Drive file ID from URL
+    private String extractFileIdFromUrl(String url) {
+        if (url == null || !url.contains("id=")) return null;
+        return url.substring(url.indexOf("id=") + 3);
+    }
+
+    // ✅ Delete all payment records (and Drive receipts)
     @DeleteMapping("/history/all")
     @Transactional
     public ResponseEntity<?> deleteAllPayments() {
@@ -173,55 +175,33 @@ public class PaymentHistoryController {
 
             int deletedReceipts = 0;
 
-            // ✅ Delete all receipts from GitHub
             for (Payment payment : payments) {
                 String receiptUrl = payment.getReceiptUrl();
                 if (receiptUrl != null && !receiptUrl.isBlank()) {
                     try {
-                        String fileName = receiptUrl.substring(receiptUrl.lastIndexOf("/") + 1);
-
-                        // Try both possible paths
-                        String[] possiblePaths = {
-                            "uploads/profile_pics/receipts/" + fileName
-                        };
-
-                        boolean deleted = false;
-                        for (String path : possiblePaths) {
-                            try {
-                                gitHubImageUploadService.deleteSingleReceiptFile(path);
-                                deletedReceipts++;
-                                deleted = true;
-                                System.out.println("✅ Deleted receipt: " + path);
-                                break;
-                            } catch (Exception ex) {
-                                System.out.println("⚠️ Tried path: " + path + " → " + ex.getMessage());
-                            }
+                        String fileId = extractFileIdFromUrl(receiptUrl);
+                        if (fileId != null) {
+                            googleDriveUploadService.deleteFile(fileId);
+                            deletedReceipts++;
                         }
-
-                        if (!deleted) {
-                            System.err.println("⚠️ Receipt not found for payment ID: " + payment.getId());
-                        }
-
                     } catch (Exception ex) {
-                        System.err.println("⚠️ Error deleting receipt for payment ID " + payment.getId() + ": " + ex.getMessage());
+                        System.err.println("⚠️ Error deleting Drive receipt for payment ID " + payment.getId() + ": " + ex.getMessage());
                     }
                 }
             }
 
-            // ✅ Unlink all payments from users
-            List<User> users = userRepository.findAll();
-            for (User user : users) {
+            // Unlink and delete
+            userRepository.findAll().forEach(user -> {
                 if (user.getPayments() != null) {
                     user.getPayments().clear();
                     userRepository.save(user);
                 }
-            }
+            });
 
-            // ✅ Delete all payment records
             paymentRepository.deleteAll();
 
             return ResponseEntity.ok(
-                    String.format("✅ Deleted %d payments and %d receipts successfully.", payments.size(), deletedReceipts)
+                    String.format("✅ Deleted %d payments and %d Drive receipts successfully.", payments.size(), deletedReceipts)
             );
 
         } catch (Exception e) {
